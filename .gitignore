@@ -1,1 +1,4 @@
 venv/\n__pycache__/\n*.db
+venv/
+n__pycache__/ 
+.db/
