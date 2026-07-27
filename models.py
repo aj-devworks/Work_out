@@ -1,158 +1,77 @@
-from flask import request, jsonify, make_response
-from config import app, db
-from models import User, Workout, Exercise, WorkoutExercise
+from config import db
+from sqlalchemy.orm import validates
+from sqlalchemy_serializer import SerializerMixin
+from sqlalchemy import CheckConstraint
 
-@app.route('/')
-def home():
-    return jsonify({"message": "Welcome to the Workout Application Backend API"}), 200
+class User(db.Model, SerializerMixin):
+    __tablename__ = 'users'
 
+    serialize_rules = ('-workouts.user', '-workouts.workout_exercises')
 
-# ==================== USER ENDPOINTS ====================
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String, nullable=False, unique=True)
+    email = db.Column(db.String, nullable=False, unique=True)
 
-@app.route('/users', methods=['GET', 'POST'])
-def handle_users():
-    if request.method == 'GET':
-        users = User.query.all()
-        return jsonify([u.to_dict() for u in users]), 200
+    workouts = db.relationship('Workout', backref='user', cascade='all, delete-orphan')
 
-    elif request.method == 'POST':
-        data = request.get_json() or {}
-        username = data.get('username')
-        email = data.get('email')
-
-        # Schema Validation
-        if not username or not email:
-            return jsonify({"error": "Validation Error: 'username' and 'email' are required."}), 400
-
-        try:
-            new_user = User(username=username, email=email)
-            db.session.add(new_user)
-            db.session.commit()
-            return jsonify(new_user.to_dict()), 201
-        except Exception as e:
-            db.session.rollback()
-            return jsonify({"error": str(e)}), 400
+    @validates('email')
+    def validate_email(self, key, address):
+        if '@' not in address:
+            raise ValueError("Invalid email address: must contain '@'")
+        return address
 
 
-@app.route('/users/<int:id>', methods=['GET', 'DELETE'])
-def handle_user_by_id(id):
-    user = User.query.get(id)
-    if not user:
-        return jsonify({"error": f"User with ID {id} not found."}), 404
+class Workout(db.Model, SerializerMixin):
+    __tablename__ = 'workouts'
 
-    if request.method == 'GET':
-        return jsonify(user.to_dict()), 200
+    serialize_rules = ('-user.workouts', '-workout_exercises.workout')
 
-    elif request.method == 'DELETE':
-        db.session.delete(user)
-        db.session.commit()
-        return jsonify({"message": f"User {id} deleted successfully."}), 200
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String, nullable=False)
+    date = db.Column(db.String, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
 
+    workout_exercises = db.relationship('WorkoutExercise', backref='workout', cascade='all, delete-orphan')
 
-# ==================== WORKOUT ENDPOINTS ====================
-
-@app.route('/workouts', methods=['GET', 'POST'])
-def handle_workouts():
-    if request.method == 'GET':
-        workouts = Workout.query.all()
-        return jsonify([w.to_dict() for w in workouts]), 200
-
-    elif request.method == 'POST':
-        data = request.get_json() or {}
-        name = data.get('name')
-        date = data.get('date')
-        user_id = data.get('user_id')
-
-        # Schema Validation
-        if not name or not date or not user_id:
-            return jsonify({"error": "Validation Error: 'name', 'date', and 'user_id' are required."}), 400
-
-        user = User.query.get(user_id)
-        if not user:
-            return jsonify({"error": f"User with ID {user_id} does not exist."}), 404
-
-        try:
-            new_workout = Workout(name=name, date=date, user_id=user_id)
-            db.session.add(new_workout)
-            db.session.commit()
-            return jsonify(new_workout.to_dict()), 201
-        except Exception as e:
-            db.session.rollback()
-            return jsonify({"error": str(e)}), 400
+    @validates('name')
+    def validate_name(self, key, name):
+        if not name or len(name.strip()) == 0:
+            raise ValueError("Workout name cannot be empty")
+        return name
 
 
-@app.route('/workouts/<int:id>', methods=['GET', 'DELETE'])
-def handle_workout_by_id(id):
-    workout = Workout.query.get(id)
-    if not workout:
-        return jsonify({"error": f"Workout with ID {id} not found."}), 404
+class Exercise(db.Model, SerializerMixin):
+    __tablename__ = 'exercises'
 
-    if request.method == 'GET':
-        return jsonify(workout.to_dict()), 200
+    serialize_rules = ('-workout_exercises.exercise',)
 
-    elif request.method == 'DELETE':
-        db.session.delete(workout)
-        db.session.commit()
-        return jsonify({"message": f"Workout {id} deleted successfully."}), 200
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String, nullable=False, unique=True)
+    category = db.Column(db.String, nullable=False)
+
+    workout_exercises = db.relationship('WorkoutExercise', backref='exercise', cascade='all, delete-orphan')
 
 
-# ==================== EXERCISE ENDPOINTS ====================
+class WorkoutExercise(db.Model, SerializerMixin):
+    __tablename__ = 'workout_exercises'
 
-@app.route('/exercises', methods=['GET', 'POST'])
-def handle_exercises():
-    if request.method == 'GET':
-        exercises = Exercise.query.all()
-        return jsonify([e.to_dict() for e in exercises]), 200
+    serialize_rules = ('-workout.workout_exercises', '-exercise.workout_exercises')
 
-    elif request.method == 'POST':
-        data = request.get_json() or {}
-        name = data.get('name')
-        category = data.get('category')
+    id = db.Column(db.Integer, primary_key=True)
+    workout_id = db.Column(db.Integer, db.ForeignKey('workouts.id'), nullable=False)
+    exercise_id = db.Column(db.Integer, db.ForeignKey('exercises.id'), nullable=False)
+    sets = db.Column(db.Integer, nullable=False)
+    reps = db.Column(db.Integer, nullable=False)
+    weight = db.Column(db.Float, nullable=False)
 
-        if not name or not category:
-            return jsonify({"error": "Validation Error: 'name' and 'category' are required."}), 400
+    __table_args__ = (
+        CheckConstraint('sets > 0', name='check_sets_positive'),
+        CheckConstraint('reps > 0', name='check_reps_positive'),
+        CheckConstraint('weight >= 0', name='check_weight_non_negative'),
+    )
 
-        try:
-            new_exercise = Exercise(name=name, category=category)
-            db.session.add(new_exercise)
-            db.session.commit()
-            return jsonify(new_exercise.to_dict()), 201
-        except Exception as e:
-            db.session.rollback()
-            return jsonify({"error": str(e)}), 400
-
-
-# ==================== WORKOUT EXERCISE ENDPOINTS ====================
-
-@app.route('/workout_exercises', methods=['POST'])
-def handle_workout_exercises():
-    data = request.get_json() or {}
-    workout_id = data.get('workout_id')
-    exercise_id = data.get('exercise_id')
-    sets = data.get('sets')
-    reps = data.get('reps')
-    weight = data.get('weight')
-
-    # Multi-field Schema Validation
-    missing_fields = [field for field in ['workout_id', 'exercise_id', 'sets', 'reps', 'weight'] if data.get(field) is None]
-    if missing_fields:
-        return jsonify({"error": f"Validation Error: Missing required fields: {', '.join(missing_fields)}"}), 400
-
-    try:
-        new_we = WorkoutExercise(
-            workout_id=workout_id,
-            exercise_id=exercise_id,
-            sets=sets,
-            reps=reps,
-            weight=weight
-        )
-        db.session.add(new_we)
-        db.session.commit()
-        return jsonify(new_we.to_dict()), 201
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"error": str(e)}), 400
-
-
-if __name__ == '__main__':
-    app.run(port=5555, debug=True)
+    @validates('sets', 'reps')
+    def validate_positive_counts(self, key, value):
+        if value is None or value <= 0:
+            raise ValueError(f"{key.capitalize()} must be greater than 0")
+        return value
